@@ -1,0 +1,193 @@
+# ****************************************
+# * docker-compose.yml for i2b2 server   *
+# * 環境変数は.envファイルに記入します        *
+# ****************************************
+# - 同じディレクトリに.envがあれば、自動的に読み込まれるので、.envについてこのファイルで特に指定する必要はありません。
+
+services:
+  # ––––––––––––––––––––––––––––––––––––––––––
+  # i2b2 database (PostgreSQL)のコンテナ定義
+  # ––––––––––––––––––––––––––––––––––––––––––
+  # ⚠️ このコンテナは、uid=0(root) gid=0(root) groups=0(root)で実行されます。これは、公式i2b2のPostgresイメージがこのように設計されているためです。
+  #    必ずしもDockerのベストプラクティスに従っていません。ただし、外部からのアクセスを正しく制限すれば、セキュリティ上のリスクは最小限に抑えられます。
+  #    それでもセキュリティ上の懸念がある場合は変更が可能ですが、Postgresの動作に影響を与える可能性があるため、ユーザーの変更は慎重に行ってください。
+  #    (例: USER postgresなど。ただし、公式i2b2のPostgresイメージはrootで動作することを前提としているため、何もしないと動作しなくなります。大幅な変更が必要です。)
+
+  # i2b2は`i2b2`という名前のデータベースを使用します。
+  i2b2-data-pgsql:
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
+      args:
+        # i2b2 postgresのイメージタグ(バージョン)を指定。.envで指定した値が使われます。
+        I2B2_DATA_PGSQL_TAG: ${I2B2_DATA_PGSQL_TAG}
+    container_name: i2b2-data-pgsql
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      # Postgresのデータを永続化するため、ホストのディレクトリをマウントします。
+      # (⚠️ Postgresのデータをクリアしたい場合は、docker volumeを削除してください。)
+      - i2b2-postgres-data:/var/lib/postgresql/data
+      - i2b2-postgres-logs:/var/log/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${I2B2_DB_NAME} -h localhost",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    # Postgresのポート設定
+    ports:
+      # ホストからのアクセスのみに制限します。
+      - 127.0.0.1:5432:5432
+      # ⚠️ 外部から接続する必要がある場合は、以下に置き換え。(開発時のみ。プロダクトでは5432は公開しない。)
+      # - 5432:5432
+    networks:
+      - i2b2-net
+
+  # ––––––––––––––––––––––––––––––––––––––––––––––
+  # i2b2 backend coreサーバーのコンテナ定義
+  # ––––––––––––––––––––––––––––––––––––––––––––––
+  i2b2-core-server:
+    image: i2b2/i2b2-core-server:${I2B2_CORE_SERVER_TAG}
+    container_name: i2b2-core-server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/i2b2/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s # WildFly can take a while
+    environment:
+      # NOTE: ユーザーが変更することを想定しない環境変数は.envでなく、ここで指定しています。
+      # i2b2のデータベースタイプ (i2b2自体はmysqlやoracleも対応しますが、ここではpostgresを使用します。変更しないでください。)
+      - DS_TYPE=postgres
+      # CRC cellの設定
+      - DS_CRC_IP=i2b2-data-pgsql # i2b2-data-pgsqlはPostgresコンテナのサービス名。docker network内で名前解決されます。
+      - DS_CRC_PORT=${POSTGRES_PORT}
+      - DS_CRC_USER=${POSTGRES_USER}
+      - DS_CRC_PASS=${POSTGRES_PASSWORD}
+      - DS_CRC_DB=${I2B2_DB_NAME}
+      - DS_CRC_SCHEMA=i2b2demodata
+      - I2B2_DS_CRC_DB_TYPE=pg
+      # ONT cellの設定
+      - DS_ONT_IP=i2b2-data-pgsql
+      - DS_ONT_PORT=${POSTGRES_PORT}
+      - DS_ONT_USER=${POSTGRES_USER}
+      - DS_ONT_PASS=${POSTGRES_PASSWORD}
+      - DS_ONT_DB=${I2B2_DB_NAME}
+      - DS_ONT_SCHEMA=i2b2metadata
+      - I2B2_DS_ONT_DB_TYPE=pg
+      # PM cellの設定
+      - DS_PM_IP=i2b2-data-pgsql
+      - DS_PM_PORT=${POSTGRES_PORT}
+      - DS_PM_USER=${POSTGRES_USER}
+      - DS_PM_PASS=${POSTGRES_PASSWORD}
+      - DS_PM_DB=${I2B2_DB_NAME}
+      - DS_PM_SCHEMA=i2b2pm
+      - I2B2_DS_PM_DB_TYPE=pg
+      # Hiveの設定
+      - DS_HIVE_IP=i2b2-data-pgsql
+      - DS_HIVE_PORT=${POSTGRES_PORT}
+      - DS_HIVE_USER=${POSTGRES_USER}
+      - DS_HIVE_PASS=${POSTGRES_PASSWORD}
+      - DS_HIVE_DB=${I2B2_DB_NAME}
+      - DS_HIVE_SCHEMA=i2b2hive
+      - I2B2_DS_HIVE_DB_TYPE=pg
+      # Workdataの設定
+      - DS_WD_IP=i2b2-data-pgsql
+      - DS_WD_PORT=${POSTGRES_PORT}
+      - DS_WD_USER=${POSTGRES_USER}
+      - DS_WD_PASS=${POSTGRES_PASSWORD}
+      - DS_WD_DB=${I2B2_DB_NAME}
+      - DS_WD_SCHEMA=i2b2workdata
+    networks:
+      - i2b2-net
+    depends_on:
+      i2b2-data-pgsql:
+        condition: service_healthy
+
+  # ––––––––––––––––––––––––––––––––––––––––––
+  # i2b2-wbclientのコンテナ定義
+  # ––––––––––––––––––––––––––––––––––––––––––
+  i2b2-webclient:
+    build:
+      context: ./webclient
+      dockerfile: Dockerfile
+      args:
+        I2B2_WEBCLIENT_TAG: ${I2B2_WEBCLIENT_TAG}
+    container_name: i2b2-webclient
+    # WebClientのポート設定
+    # ‼️ Nginxをリバースプロキシとして使用するため、docker network内で80番のみExposeし、ホストには公開しません。
+    expose:
+      - "80"
+    # もしプロキシを介さず直接公開したい場合は、以下のように設定 (推奨しません)
+    # ports:
+    #  - 8000:80"
+    command: /run-httpd.sh localhost
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/webclient/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      i2b2-core-server:
+        condition: service_healthy
+    networks:
+      - i2b2-net
+
+  # –––––––––––––––––––––––––––––––––––––––
+  # リバースプロキシ (nginx) のコンテナ定義
+  # ‼️ これはi2b2の公式リリースではありませんが、i2b2-webclientのパフォーマンスとセキュリティ向上のため追加しています。
+  # –––––––––––––––––––––––––––––––––––––––
+  # i2b2-webclientはApacheで動作していますが、リバースプロキシとしてnginxを使用して、HTTP/HTTPSの終端を行います。
+  # nginx-unprivilegedイメージを使い、非rootユーザー(uid=101)で動作させます。
+  # ⚠️ ユーザーはnginx (uid=101)であり、rootではありません。Dockerのベストプラクティスに従っています。
+  i2b2-nginx:
+    build:
+      context: ./reverse_proxy
+      dockerfile: Dockerfile
+    container_name: i2b2-nginx
+    ports:
+      # HTTPのポート設定 (HTTP -> i2b2-webclientへリバースプロキシ)
+      # ⚠️ HTTPSはサポートしません。もし必要な場合も、このNGINXサーバーでTLS設定を行うのはあまり現実的ではありません。
+      #    HTTPSを使用する場合は、AWSのALBなどの外部サービスでHTTPS終端を行い、それ以降はHTTPでこのサービスに接続することが安全かつ現実的です。
+      #    その場合、NGINXのconfファイルを適切に調整してください (例: X-Forwarded-Protoヘッダー、クライアントIP取得の設定など)。
+      - "8091:8080"
+    volumes:
+      # NGINXのログをホストに保存する
+      - i2b2-nginx-logs:/var/log/nginx
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      i2b2-webclient:
+        condition: service_healthy
+    networks:
+      - i2b2-net
+
+# –––––––––––––––––––––––––––––––––––––––
+# Docker Network 定義
+# –––––––––––––––––––––––––––––––––––––––
+# 同じネットワーク内のコンテナは、サービス名で互いに通信でき、名前解決も自動的に行われます。
+networks:
+  i2b2-net:
+    name: i2b2-net
+
+# -–––––––––––––––––––––––––––––––––––––––
+# Docker Volume 定義
+# ––––––––––––––––––––––––––––––––––––––––
+# データの永続化にDocker Volumeを使用します。
+volumes:
+  i2b2-nginx-logs:
+  i2b2-postgres-data:
+  i2b2-postgres-logs:
