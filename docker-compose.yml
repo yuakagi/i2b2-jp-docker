@@ -159,7 +159,7 @@ services:
       # ⚠️ HTTPSはサポートしません。もし必要な場合も、このNGINXサーバーでTLS設定を行うのはあまり現実的ではありません。
       #    HTTPSを使用する場合は、AWSのALBなどの外部サービスでHTTPS終端を行い、それ以降はHTTPでこのサービスに接続することが安全かつ現実的です。
       #    その場合、NGINXのconfファイルを適切に調整してください (例: X-Forwarded-Protoヘッダー、クライアントIP取得の設定など)。
-      - "8091:8080"
+      - "80:8080"
     volumes:
       # NGINXのログをホストに保存する
       - i2b2-nginx-logs:/var/log/nginx
